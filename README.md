@@ -1,2 +1,2 @@
 # air-quality-data-pipeline
-A data pipeline for global air quality analytics
+A data pipeline for Southeast Asia air quality analytics
