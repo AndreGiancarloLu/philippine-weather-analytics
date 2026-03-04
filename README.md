@@ -1,2 +1,2 @@
-# sea-market-pipeline
-A data pipeline for analyzing stock market data from companies listed in Southeast Asian stock exchanges
+# philippine-weather-pipeline
+A data pipeline for analyzing weather trends and other meteorological metrics in various provinces in the Philippines.
