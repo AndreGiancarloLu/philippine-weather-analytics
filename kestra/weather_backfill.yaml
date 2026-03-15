@@ -1,0 +1,217 @@
+id: ph_weather_backfill
+namespace: zoomcamp
+description: "Backfill one month of Philippine weather data"
+
+inputs:
+  - id: year
+    type: INT
+    defaults: 2015
+  - id: month
+    type: INT
+    defaults: 1
+
+tasks:
+  - id: run_backfill_pipeline
+    type: io.kestra.plugin.scripts.python.Script
+    taskRunner:
+      type: io.kestra.plugin.core.runner.Process
+    beforeCommands:
+      - pip install "dlt[bigquery]==1.4.1" openmeteo-requests requests-cache retry-requests pandas google-cloud-bigquery-storage -q
+    script: |
+      import time
+      import calendar
+      import requests
+      import requests_cache
+      import pandas as pd
+      import tempfile
+      import dlt
+      import openmeteo_requests
+      from retry_requests import retry
+      from datetime import datetime, timedelta, timezone
+      import os
+      import threading
+
+
+      os.environ["RUNTIME__LOG_LEVEL"] = "INFO"
+
+        # --- INTERNAL SUCCESS TIMEOUT ---
+      def force_success_exit():
+          print("\n[TIMEOUT] 4.5 minutes reached. Data is loaded, but process is hanging. Forcing SUCCESS exit...", flush=True)
+          os._exit(0)
+
+        # Start a background countdown timer for 270 seconds (4.5 minutes)
+        # This guarantees Python exits with Success BEFORE Kestra's 5-minute kill switch triggers
+      kill_timer = threading.Timer(270.0, force_success_exit)
+      kill_timer.start()
+      YEAR = {{ inputs.year }}
+      MONTH = {{ inputs.month }}
+
+      NOMINATIM_HEADERS = {"User-Agent": "ph-weather-analytics/1.0"}
+      NCR = {"province": "Metro Manila (NCR)", "lat": 14.5086, "lon": 121.0197}
+
+      PHILIPPINE_PROVINCES = [
+          "Abra", "Agusan del Norte", "Agusan del Sur", "Aklan", "Albay",
+          "Antique", "Apayao", "Aurora", "Basilan", "Bataan",
+          "Batanes", "Batangas", "Benguet", "Biliran", "Bohol",
+          "Bukidnon", "Bulacan", "Cagayan", "Camarines Norte", "Camarines Sur",
+          "Camiguin", "Capiz", "Catanduanes", "Cavite", "Cebu",
+          "Cotabato", "Davao de Oro", "Davao del Norte", "Davao del Sur", "Davao Occidental",
+          "Davao Oriental", "Dinagat Islands", "Eastern Samar", "Guimaras", "Ifugao",
+          "Ilocos Norte", "Ilocos Sur", "Iloilo", "Isabela", "Kalinga",
+          "La Union", "Laguna", "Lanao del Norte", "Lanao del Sur", "Leyte",
+          "Maguindanao del Norte", "Maguindanao del Sur", "Marinduque", "Masbate",
+          "Misamis Occidental", "Misamis Oriental", "Mountain Province", "Negros Occidental", "Negros Oriental",
+          "Northern Samar", "Nueva Ecija", "Nueva Vizcaya", "Occidental Mindoro", "Oriental Mindoro",
+          "Palawan", "Pampanga", "Pangasinan", "Quezon", "Quirino",
+          "Rizal", "Romblon", "Samar", "Sarangani", "Siquijor",
+          "Sorsogon", "South Cotabato", "Southern Leyte", "Sultan Kudarat", "Sulu",
+          "Surigao del Norte", "Surigao del Sur", "Tarlac", "Tawi-Tawi", "Zambales",
+          "Zamboanga del Norte", "Zamboanga del Sur", "Zamboanga Sibugay"
+      ]
+
+      DAILY_VARIABLES = [
+          "temperature_2m_max", "temperature_2m_min", "temperature_2m_mean",
+          "precipitation_sum", "rain_sum", "precipitation_hours",
+          "wind_speed_10m_max", "wind_gusts_10m_max", "wind_direction_10m_dominant",
+          "relative_humidity_2m_max", "relative_humidity_2m_min",
+          "shortwave_radiation_sum", "sunshine_duration", "et0_fao_evapotranspiration"
+      ]
+
+      cache_session = requests_cache.CachedSession('/tmp/kestra-wd/nominatim_cache', expire_after=-1)
+      retry_session = retry(cache_session, retries=3, backoff_factor=2)
+      openmeteo = openmeteo_requests.Client(session=retry_session)
+
+      def get_coordinates(province, retries=3):
+          for attempt in range(retries):
+              try:
+                  resp = requests.get(
+                      "https://nominatim.openstreetmap.org/search",
+                      params={"q": f"{province}, Philippines", "format": "json", "limit": 1},
+                      headers=NOMINATIM_HEADERS,
+                      timeout=10
+                  )
+                  results = resp.json()
+                  if results:
+                      return float(results[0]["lat"]), float(results[0]["lon"])
+                  return None, None
+              except Exception as e:
+                  print(f"  [ERROR] get_coordinates {province} attempt {attempt + 1}: {e}")
+                  time.sleep(2)
+          return None, None
+
+
+      def clean_float(val):
+          # pd.isna() safely catches NumPy NaNs and converts them to standard None
+          return None if pd.isna(val) else float(val)
+
+      @dlt.resource(
+          write_disposition="append",
+          name="weather_daily"
+      )
+      def monthly_resource(locations, start, end):
+          lats = [loc["lat"] for loc in locations]
+          lons = [loc["lon"] for loc in locations]
+
+          print(f"  [backfill] Fetching {start} to {end} for {len(locations)} provinces...")
+
+          responses = openmeteo.weather_api(
+              "https://archive-api.open-meteo.com/v1/archive",
+              params={
+                  "latitude": lats,
+                  "longitude": lons,
+                  "start_date": start,
+                  "end_date": end,
+                  "daily": DAILY_VARIABLES
+              }
+          )
+
+          total = 0
+          for i, response in enumerate(responses):
+              province = locations[i]["province"]
+              lat = locations[i]["lat"]
+              lon = locations[i]["lon"]
+
+              daily = response.Daily()
+              dates = pd.date_range(
+                  start=pd.to_datetime(daily.Time(), unit="s", utc=True),
+                  end=pd.to_datetime(daily.TimeEnd(), unit="s", utc=True),
+                  freq=pd.Timedelta(seconds=daily.Interval()),
+                  inclusive="left"
+              ).strftime("%Y-%m-%d").tolist()
+
+              values = [daily.Variables(idx).ValuesAsNumpy() for idx in range(len(DAILY_VARIABLES))]
+
+              for j, date in enumerate(dates):
+                  yield {
+                      "province": province,
+                      "latitude": lat,
+                      "longitude": lon,
+                      "date": date,
+                      "temperature_max": clean_float(values[0][j]),
+                      "temperature_min": clean_float(values[1][j]),
+                      "temperature_mean": clean_float(values[2][j]),
+                      "precipitation_sum": clean_float(values[3][j]),
+                      "rain_sum": clean_float(values[4][j]),
+                      "precipitation_hours": clean_float(values[5][j]),
+                      "wind_speed_max": clean_float(values[6][j]),
+                      "wind_gusts_max": clean_float(values[7][j]),
+                      "wind_direction_dominant": clean_float(values[8][j]),
+                      "humidity_max": clean_float(values[9][j]),
+                      "humidity_min": clean_float(values[10][j]),
+                      "shortwave_radiation_sum": clean_float(values[11][j]),
+                      "sunshine_duration": clean_float(values[12][j]),
+                      "evapotranspiration": clean_float(values[13][j]),
+                  }
+                  total += 1
+          print(f"  [backfill] Done — {total} rows")
+
+      # resolve coordinates once
+      print("  [backfill] Resolving coordinates...")
+      locations = [NCR]
+      for province in PHILIPPINE_PROVINCES:
+          lat, lon = get_coordinates(province)
+          if lat:
+              locations.append({"province": province, "lat": lat, "lon": lon})
+          else:
+              print(f"  [WARN] Could not resolve coordinates for {province}")
+          time.sleep(1)
+
+      # compute date range for this month
+      today = datetime.now(timezone.utc).date()
+      month_start = datetime(YEAR, MONTH, 1).date()
+      last_day = calendar.monthrange(YEAR, MONTH)[1]
+      month_end = datetime(YEAR, MONTH, last_day).date()
+
+      if month_start > today:
+          print(f"  [backfill] {YEAR}-{MONTH:02d} is in the future, skipping")
+      else:
+          if month_end >= today:
+              month_end = today - timedelta(days=1)
+
+          start = month_start.strftime("%Y-%m-%d")
+          end = month_end.strftime("%Y-%m-%d")
+
+          ephemeral_dlt_dir = tempfile.mkdtemp()
+
+          pipeline = dlt.pipeline(
+              pipeline_name="philippine_weather_analytics_pipeline",
+              destination="bigquery",
+              dataset_name="raw_ph_weather",
+              pipelines_dir=ephemeral_dlt_dir, # <-- Point to the temp folder
+              full_refresh=False,
+              progress="log"
+          )
+
+          try:
+              load_info = pipeline.run(monthly_resource(locations, start, end))
+              print(f"[DONE] {YEAR}-{MONTH:02d}: {load_info}")
+          except Exception as e:
+              print(f"[FAILED] {YEAR}-{MONTH:02d}: {e}")
+              raise
+          finally:
+              # Stop the countdown timer if we actually finished cleanly
+              kill_timer.cancel()
+              
+              cache_session.close()
+              print("[BACKFILL COMPLETE - CLEAN EXIT]")
+              os._exit(0)

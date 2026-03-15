@@ -1,0 +1,35 @@
+id: ph_weather_backfill_orchestrator
+namespace: zoomcamp
+description: "Orchestrates full historical backfill month by month from 2015 to 2026"
+
+tasks:
+  - id: run_backfills
+    type: io.kestra.plugin.core.flow.ForEach
+    values:
+      - "2015-12"
+      - "2016-1"
+      - "2016-2"
+      - "2016-3"
+      - "2016-4"
+      - "2016-5"
+      - "2016-6"
+      - "2016-7"
+      - "2016-8"
+      - "2016-9"
+      - "2016-10"
+      - "2016-11"
+      - "2016-12"
+    concurrencyLimit: 1
+    tasks:
+      - id: trigger_backfill
+        type: io.kestra.plugin.core.flow.Subflow
+        flowId: ph_weather_backfill
+        namespace: zoomcamp
+        inputs:
+          year: "{{ (taskrun.value | split('-'))[0] }}"
+          month: "{{ (taskrun.value | split('-'))[1] }}"
+        wait: true
+        
+      - id: wait_before_next
+        type: io.kestra.plugin.core.flow.Sleep
+        duration: PT1M

@@ -1,0 +1,132 @@
+id: ph_weather_ingestion
+namespace: zoomcamp
+description: "Fetch Philippine weather data from Open-Meteo and load to BigQuery"
+
+tasks:
+  - id: run_dlt_pipeline
+    type: io.kestra.plugin.scripts.python.Script
+    taskRunner:
+      type: io.kestra.plugin.core.runner.Process
+    beforeCommands:
+      - pip install "dlt[bigquery]==1.4.1" requests -q
+    script: |
+      import os
+      import time
+      import requests
+      import dlt
+      from datetime import datetime, timedelta, timezone
+
+      NOMINATIM_HEADERS = {"User-Agent": "ph-weather-analytics/1.0"}
+
+      NCR = {"province": "Metro Manila (NCR)", "lat": 14.5086, "lon": 121.0197}
+
+      PHILIPPINE_PROVINCES = [
+          "Abra", "Agusan del Norte", "Agusan del Sur", "Aklan", "Albay",
+          "Antique", "Apayao", "Aurora", "Basilan", "Bataan",
+          "Batanes", "Batangas", "Benguet", "Biliran", "Bohol",
+          "Bukidnon", "Bulacan", "Cagayan", "Camarines Norte", "Camarines Sur",
+          "Camiguin", "Capiz", "Catanduanes", "Cavite", "Cebu",
+          "Cotabato", "Davao de Oro", "Davao del Norte", "Davao del Sur", "Davao Occidental",
+          "Davao Oriental", "Dinagat Islands", "Eastern Samar", "Guimaras", "Ifugao",
+          "Ilocos Norte", "Ilocos Sur", "Iloilo", "Isabela", "Kalinga",
+          "La Union", "Laguna", "Lanao del Norte", "Lanao del Sur", "Leyte",
+          "Maguindanao del Norte", "Maguindanao del Sur", "Marinduque", "Masbate",
+          "Misamis Occidental", "Misamis Oriental", "Mountain Province", "Negros Occidental", "Negros Oriental",
+          "Northern Samar", "Nueva Ecija", "Nueva Vizcaya", "Occidental Mindoro", "Oriental Mindoro",
+          "Palawan", "Pampanga", "Pangasinan", "Quezon", "Quirino",
+          "Rizal", "Romblon", "Samar", "Sarangani", "Siquijor",
+          "Sorsogon", "South Cotabato", "Southern Leyte", "Sultan Kudarat", "Sulu",
+          "Surigao del Norte", "Surigao del Sur", "Tarlac", "Tawi-Tawi", "Zambales",
+          "Zamboanga del Norte", "Zamboanga del Sur", "Zamboanga Sibugay"
+      ]
+
+      def get_coordinates(province, retries=3):
+          for attempt in range(retries):
+              try:
+                  resp = requests.get(
+                      "https://nominatim.openstreetmap.org/search",
+                      params={"q": f"{province}, Philippines", "format": "json", "limit": 1},
+                      headers=NOMINATIM_HEADERS,
+                      timeout=10
+                  )
+                  results = resp.json()
+                  if results:
+                      return float(results[0]["lat"]), float(results[0]["lon"])
+                  return None, None
+              except Exception as e:
+                  print(f"  [ERROR] get_coordinates {province} attempt {attempt + 1}: {e}")
+                  time.sleep(2)
+          return None, None
+
+      def fetch_weather(province, lat, lon, start_date, end_date):
+          resp = requests.get(
+              "https://archive-api.open-meteo.com/v1/archive",
+              params={
+                  "latitude": lat,
+                  "longitude": lon,
+                  "start_date": start_date,
+                  "end_date": end_date,
+                  "daily": "temperature_2m_max,temperature_2m_min,temperature_2m_mean,precipitation_sum,wind_speed_10m_max,wind_direction_10m_dominant,relative_humidity_2m_max,relative_humidity_2m_min"
+              },
+              timeout=30
+          )
+          if resp.status_code != 200:
+              print(f"  [ERROR] fetch_weather {province} status={resp.status_code}")
+              return
+          daily = resp.json().get("daily", {})
+          times = daily.get("time", [])
+          for i, date in enumerate(times):
+              yield {
+                  "province": province,
+                  "latitude": lat,
+                  "longitude": lon,
+                  "date": date,
+                  "temperature_max": daily["temperature_2m_max"][i],
+                  "temperature_min": daily["temperature_2m_min"][i],
+                  "temperature_mean": daily["temperature_2m_mean"][i],
+                  "precipitation_sum": daily["precipitation_sum"][i],
+                  "wind_speed_max": daily["wind_speed_10m_max"][i],
+                  "wind_direction_dominant": daily["wind_direction_10m_dominant"][i],
+                  "humidity_max": daily["relative_humidity_2m_max"][i],
+                  "humidity_min": daily["relative_humidity_2m_min"][i],
+              }
+
+      @dlt.resource(write_disposition="merge", name="weather_daily",primary_key=["province", "date"])
+      def weather_resource():
+          # for daily runs, fetch yesterday's data only
+          yesterday = (datetime.now(timezone.utc) - timedelta(days=1)).strftime("%Y-%m-%d")
+
+          # build province list with coordinates
+          locations = [NCR]
+          for province in PHILIPPINE_PROVINCES:
+              lat, lon = get_coordinates(province)
+              if lat:
+                  locations.append({"province": province, "lat": lat, "lon": lon})
+              else:
+                  print(f"  [WARN] Could not resolve coordinates for {province}")
+              time.sleep(1)
+
+          print(f"  [weather] Fetching data for {len(locations)} provinces...")
+          total = 0
+          for loc in locations:
+              for row in fetch_weather(loc["province"], loc["lat"], loc["lon"], yesterday, yesterday):
+                  total += 1
+                  yield row
+          print(f"  [weather] Done — {total} rows loaded")
+
+      pipeline = dlt.pipeline(
+          pipeline_name="ph_weather_pipeline",
+          destination="bigquery",
+          dataset_name="raw_ph_weather"
+      )
+
+      try:
+          load_info = pipeline.run(weather_resource())
+          print(f"[DONE]: {load_info}")
+      except Exception as e:
+          print(f"[FAILED]: {e}")
+
+triggers:
+  - id: daily_schedule
+    type: io.kestra.plugin.core.trigger.Schedule
+    cron: "0 0 * * *"

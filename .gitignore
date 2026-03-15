@@ -4,4 +4,6 @@ __pycache__/
 .env
 .dbt/
 .env
-service-account-key.json
+kestra-service-account-key.json
+dbt-service-account-key.json
+.cache.sqlite

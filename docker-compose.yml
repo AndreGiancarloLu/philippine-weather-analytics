@@ -1,5 +1,8 @@
+version: "3.9"
+
 volumes:
   kestra-data:
+  kestra-dlt-state:
 
 services:
   kestra:
@@ -12,11 +15,10 @@ services:
       KESTRA_CONFIGURATION: |
         kestra:
           variables:
-            gcp_project_id: "air-quality-data-pipeline"
+            gcp_project_id: "ph-weather-analytics"
       GOOGLE_APPLICATION_CREDENTIALS: /secrets/sa-key.json
-      OPENAQ_API_KEY: ${OPENAQ_API_KEY}
     volumes:
       - kestra-data:/app/storage
       - /var/run/docker.sock:/var/run/docker.sock
       - /tmp/kestra-wd:/tmp/kestra-wd
-      - ./service-account-key.json:/secrets/sa-key.json
+      - ./kestra-service-account-key.json:/secrets/sa-key.json
