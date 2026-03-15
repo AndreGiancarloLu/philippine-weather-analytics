@@ -15,8 +15,8 @@ WITH raw_weather_data AS (
         CAST(latitude AS FLOAT64)                AS latitude,
         CAST(longitude AS FLOAT64)               AS longitude,
         CAST(date AS DATE)                       AS date,
-        EXTRACT(YEAR FROM date)                  AS year,
-        EXTRACT(MONTH FROM date)                 AS month,
+        EXTRACT(YEAR FROM CAST(date AS DATE))    AS year,
+        EXTRACT(MONTH FROM CAST(date AS DATE))   AS month,
         {{ get_region('province') }}             AS region,
 
         -- temperature --
@@ -30,7 +30,6 @@ WITH raw_weather_data AS (
 
         -- wind --
         CAST(wind_speed_max AS FLOAT64)          AS wind_speed_max,
-        CAST(wind_gusts_max AS FLOAT64)          AS wind_gusts_max,
         CAST(wind_direction_dominant AS FLOAT64) AS wind_direction,
 
         -- humidity --

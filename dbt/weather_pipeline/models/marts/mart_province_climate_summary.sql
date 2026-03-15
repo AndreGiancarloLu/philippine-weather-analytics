@@ -9,8 +9,10 @@ WITH summary AS (
         AVG(humidity_max)        AS avg_daily_humidity_max,
         AVG(humidity_min)        AS avg_daily_humidity_min,
         AVG(wind_speed_max)      AS avg_daily_strongest_wind_speed
-    FROM {{ ref('stg_raw_weather_data') }}
-    GROUP BY province, region
+    FROM 
+        {{ ref('stg_raw_weather_data') }}
+    GROUP BY 
+        province, region
 )
 
 SELECT * FROM summary

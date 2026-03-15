@@ -1,0 +1,50 @@
+version: 2
+
+models:
+  - name: mart_annual_trends
+    description: "Annual weather aggregates per province. Used for year-over-year trend analysis."
+    columns:
+      - name: province
+        tests:
+          - not_null
+      - name: year
+        tests:
+          - not_null
+  - name: mart_monthly_patterns
+    description: "Average weather conditions per province per month across all years. Reveals seasonality patterns."
+    columns:
+      - name: province
+        tests:
+          - not_null
+      - name: month
+        tests:
+          - not_null
+  - name: mart_province_climate_summary
+    description: "Average daily weather conditions per province across all years. One row per province."
+    columns:
+      - name: province
+        tests:
+          - not_null
+          - unique
+  - name: mart_season_summary
+    description: "Average weather conditions per province split by wet and dry season."
+    columns:
+      - name: province
+        tests:
+          - not_null
+      - name: season
+        tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ['Wet', 'Dry']
+
+  - name: mart_weather_severity_summary
+    description: "Annual count of weather hazard days per province classified by PAGASA wind signal thresholds, PAGASA rainfall advisory thresholds, and PAGASA heat index classifications."
+    columns:
+      - name: province
+        tests:
+          - not_null
+      - name: year
+        tests:
+          - not_null
