@@ -180,19 +180,19 @@ The Power BI dashboard contains 6 pages:
 ![Province Overview](/screenshots/Province_Overview.png)
 
 ### Province Rankings
-![Province Rankings](/ph-weather-pipeline/screenshots/Province_Rankings.png)
+![Province Rankings](/screenshots/Province_Rankings.png)
 
 ### Monthly Trends
-![Monthly Trends](/ph-weather-pipeline/screenshots/Monthly_Trends.png)
+![Monthly Trends](/screenshots/Monthly_Trends.png)
 
 ### Annual Trends
-![Annual Trends](/ph-weather-pipeline/screenshots/Annual_Trends.png)
+![Annual Trends](/screenshots/Annual_Trends.png)
 
 ### Weather Risk Summary
-![Weather Risk Summary](/ph-weather-pipeline/screenshots/Weather_Risk_summary.png)
+![Weather Risk Summary](/screenshots/Weather_Risk_summary.png)
 
 ### Season Comparison
-![Season Comparison](/ph-weather-pipeline/screenshots/Season_Comparison.png)
+![Season Comparison](/screenshots/Season_Comparison.png)
 ---
 
 
